@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Isaac Lab 3.0 (Newton / MuJoCo-Warp) simulation server that communicates
+Isaac Lab 2.x (IsaacSim / PhysX) simulation server that communicates
 with the C++ TcpHWInterface client over length-prefixed Protobuf/TCP.
 
 Threads:
@@ -8,9 +8,9 @@ Threads:
   - TCP thread:   accepts one client, dispatches protobuf messages
 
 Convention differences vs MuJoCo server (and how they are handled):
-  - Quaternion: IsaacLab uses xyzw, Protobuf uses wxyz  -> converted on read/write
+  - Quaternion: PhysX IsaacLab uses wxyz, Protobuf uses wxyz  -> no conversion needed
   - Root velocities: IsaacLab world-frame, Protobuf local/body-frame
-      -> Use root_link_lin_vel_b / root_link_ang_vel_b for state snapshot
+      -> Rotate world-frame velocities to body-frame on CPU for state snapshot
       -> Convert local->world when writing init state
 """
 
@@ -27,7 +27,7 @@ import time
 
 from isaaclab.app import AppLauncher
 
-parser = argparse.ArgumentParser(description="IsaacLab TCP simulation server (Newton/MuJoCo backend)")
+parser = argparse.ArgumentParser(description="IsaacLab TCP simulation server (PhysX backend)")
 parser.add_argument("--host", default="0.0.0.0", help="TCP bind address")
 parser.add_argument("--port", type=int, default=9000, help="TCP port")
 parser.add_argument("--usd_path", default="/wb_humanoid_mpc_ws/g1_description/g1_29_dof/g1_29dof_rev_1_0.usd",
@@ -46,14 +46,11 @@ import logging  # noqa: E402
 
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
-import warp as wp  # noqa: E402
 
 import isaaclab.sim as sim_utils  # noqa: E402
 from isaaclab.actuators import ImplicitActuatorCfg  # noqa: E402
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg  # noqa: E402
 from isaaclab.scene import InteractiveScene, InteractiveSceneCfg  # noqa: E402
-from isaaclab_newton.physics import MJWarpSolverCfg, NewtonCfg  # noqa: E402
-from isaaclab_visualizers.newton import NewtonVisualizerCfg  # noqa: E402
 
 import tcp_bridge_pb2 as pb  # noqa: E402
 
@@ -68,35 +65,20 @@ logger.addHandler(_handler)
 # ---------------------------------------------------------------------------
 
 
-def _to_torch(warp_array):
-    if isinstance(warp_array, torch.Tensor):
-        return warp_array
-    return wp.to_torch(warp_array)
+def quat_rotate_wxyz(q_wxyz: np.ndarray, v: np.ndarray) -> np.ndarray:
+    """Rotate vector v by quaternion q in (w, x, y, z) convention."""
+    w, x, y, z = q_wxyz
+    u = np.array([x, y, z])
+    t = 2.0 * np.cross(u, v)
+    return v + w * t + np.cross(u, t)
 
 
-def quat_rotate_xyzw(q_xyzw: np.ndarray, v: np.ndarray) -> np.ndarray:
-    """Rotate vector v by quaternion q in (x, y, z, w) convention."""
-    x, y, z, w = q_xyzw
-    t = 2.0 * np.cross(np.array([x, y, z]), v)
-    return v + w * t + np.cross(np.array([x, y, z]), t)
-
-
-def quat_rotate_inverse_xyzw(q_xyzw: np.ndarray, v: np.ndarray) -> np.ndarray:
-    """Rotate vector v by the inverse of quaternion q in (x, y, z, w) convention."""
-    x, y, z, w = q_xyzw
+def quat_rotate_inverse_wxyz(q_wxyz: np.ndarray, v: np.ndarray) -> np.ndarray:
+    """Rotate vector v by the inverse of quaternion q in (w, x, y, z) convention."""
+    w, x, y, z = q_wxyz
     u = np.array([x, y, z])
     t = 2.0 * np.cross(u, v)
     return v - w * t + np.cross(u, t)
-
-
-def wxyz_to_xyzw(q_wxyz):
-    """Convert quaternion from (w,x,y,z) to (x,y,z,w)."""
-    return [q_wxyz[1], q_wxyz[2], q_wxyz[3], q_wxyz[0]]
-
-
-def xyzw_to_wxyz(q_xyzw):
-    """Convert quaternion from (x,y,z,w) to (w,x,y,z)."""
-    return [q_xyzw[3], q_xyzw[0], q_xyzw[1], q_xyzw[2]]
 
 
 # ---------------------------------------------------------------------------
@@ -206,28 +188,6 @@ def _make_articulation_cfg(usd_path: str) -> ArticulationCfg:
             ),
         },
     )
-
-
-# ---------------------------------------------------------------------------
-# Newton solver config (same as g1_test_sim.py)
-# ---------------------------------------------------------------------------
-
-_SOLVER_CFG = MJWarpSolverCfg(
-    solver="newton",
-    integrator="implicitfast",
-    njmax=2000,
-    nconmax=1000,
-    impratio=100.0,
-    cone="elliptic",
-    update_data_interval=2,
-    iterations=20, # TODO
-    ls_iterations=100,
-    ccd_iterations=80, # TODO
-    ls_parallel=True,
-    use_mujoco_contacts=False, # TODO
-)
-
-_NEWTON_CFG = NewtonCfg(solver_cfg=_SOLVER_CFG, num_substeps=1)
 
 
 # ===========================================================================
@@ -361,10 +321,10 @@ class IsaacLabSimServer:
         js = self._snap_jpos_start
         vs = self._snap_jvel_start
 
-        self._snap_gpu[:7] = wp.to_torch(d.root_link_pose_w)[0]
-        self._snap_gpu[7:13] = wp.to_torch(d.root_com_vel_w)[0]
-        self._snap_gpu[js:vs] = wp.to_torch(d.joint_pos)[0]
-        self._snap_gpu[vs:] = wp.to_torch(d.joint_vel)[0]
+        self._snap_gpu[:7] = d.root_link_pose_w[0]
+        self._snap_gpu[7:13] = d.root_com_vel_w[0]
+        self._snap_gpu[js:vs] = d.joint_pos[0]
+        self._snap_gpu[vs:] = d.joint_vel[0]
         t = self._snap_time
 
         self._snap_cpu.copy_(self._snap_gpu, non_blocking=False)
@@ -373,16 +333,15 @@ class IsaacLabSimServer:
         js = self._snap_jpos_start
         vs = self._snap_jvel_start
 
-        quat_xyzw = buf[3:7]
-        lin_vel_b = quat_rotate_inverse_xyzw(quat_xyzw, buf[7:10])
-        ang_vel_b = quat_rotate_inverse_xyzw(quat_xyzw, buf[10:13])
+        quat_wxyz = buf[3:7]
+        lin_vel_b = quat_rotate_inverse_wxyz(quat_wxyz, buf[7:10])
+        ang_vel_b = quat_rotate_inverse_wxyz(quat_wxyz, buf[10:13])
 
         self._last_root_z = float(buf[2])
 
         state_msg.time = t
         state_msg.root_position.extend(buf[:3].tolist())
-        state_msg.root_orientation.extend([float(quat_xyzw[3]), float(quat_xyzw[0]),
-                                           float(quat_xyzw[1]), float(quat_xyzw[2])])
+        state_msg.root_orientation.extend(quat_wxyz.tolist())
         state_msg.root_linear_vel.extend(lin_vel_b.tolist())
         state_msg.root_angular_vel.extend(ang_vel_b.tolist())
         state_msg.joint_positions.extend(buf[js:vs][idx].tolist())
@@ -423,13 +382,7 @@ class IsaacLabSimServer:
         sim_cfg = sim_utils.SimulationCfg(
             dt=self.dt,
             render_interval=render_interval,
-            physics=_NEWTON_CFG,
             device=args_cli.device,
-            visualizer_cfgs=NewtonVisualizerCfg(
-                update_frequency=render_interval,
-                camera_position=(3.5, 0.0, 3.2),
-                camera_target=(0.0, 0.0, 0.5),
-            ),
         )
         self.sim = sim_utils.SimulationContext(sim_cfg)
         self.sim.set_camera_view([3.5, 0.0, 3.2], [0.0, 0.0, 0.5])
@@ -513,32 +466,31 @@ class IsaacLabSimServer:
         """
         init_state = getattr(self, "_pending_init_state", None)
 
-        default_root = _to_torch(self.robot.data.default_root_state).clone()
+        default_root = self.robot.data.default_root_state.clone()
         default_root[:, :3] += self.scene.env_origins
 
         root_pose = default_root[:, :7].clone()
         root_vel = default_root[:, 7:].clone()
-        jpos = _to_torch(self.robot.data.default_joint_pos).clone()
-        jvel = _to_torch(self.robot.data.default_joint_vel).clone()
+        jpos = self.robot.data.default_joint_pos.clone()
+        jvel = self.robot.data.default_joint_vel.clone()
 
         if init_state is not None:
             if len(init_state.root_position) == 3:
                 root_pose[0, :3] = torch.tensor(list(init_state.root_position), device=self.device)
 
             if len(init_state.root_orientation) == 4:
-                q_xyzw = wxyz_to_xyzw(list(init_state.root_orientation))
-                root_pose[0, 3:7] = torch.tensor(q_xyzw, device=self.device)
+                root_pose[0, 3:7] = torch.tensor(list(init_state.root_orientation), device=self.device)
 
-            q_xyzw_np = root_pose[0, 3:7].cpu().numpy()
+            q_wxyz_np = root_pose[0, 3:7].cpu().numpy()
 
             if len(init_state.root_linear_vel) == 3:
                 v_local = np.array(list(init_state.root_linear_vel))
-                v_world = quat_rotate_xyzw(q_xyzw_np, v_local)
+                v_world = quat_rotate_wxyz(q_wxyz_np, v_local)
                 root_vel[0, :3] = torch.tensor(v_world, dtype=torch.float32, device=self.device)
 
             if len(init_state.root_angular_vel) == 3:
                 w_local = np.array(list(init_state.root_angular_vel))
-                w_world = quat_rotate_xyzw(q_xyzw_np, w_local)
+                w_world = quat_rotate_wxyz(q_wxyz_np, w_local)
                 root_vel[0, 3:6] = torch.tensor(w_world, dtype=torch.float32, device=self.device)
 
             if len(init_state.joint_positions) > 0:
@@ -551,10 +503,9 @@ class IsaacLabSimServer:
                     if i < len(init_state.joint_velocities):
                         jvel[0, idx] = init_state.joint_velocities[i]
 
-        self.robot.write_root_link_pose_to_sim_index(root_pose=root_pose)
-        self.robot.write_root_link_velocity_to_sim_index(root_velocity=root_vel)
-        self.robot.write_joint_position_to_sim_index(position=jpos)
-        self.robot.write_joint_velocity_to_sim_index(velocity=jvel)
+        self.robot.write_root_link_pose_to_sim(root_pose)
+        self.robot.write_root_com_velocity_to_sim(root_vel)
+        self.robot.write_joint_state_to_sim(jpos, jvel)
 
         self.init_root_pose = root_pose.clone()
         self.init_root_vel = root_vel.clone()
@@ -578,10 +529,10 @@ class IsaacLabSimServer:
         js = self._snap_jpos_start
         vs = self._snap_jvel_start
 
-        self._snap_gpu[:7] = wp.to_torch(d.root_link_pose_w)[0]
-        self._snap_gpu[7:13] = wp.to_torch(d.root_com_vel_w)[0]
-        self._snap_gpu[js:vs] = wp.to_torch(d.joint_pos)[0]
-        self._snap_gpu[vs:] = wp.to_torch(d.joint_vel)[0]
+        self._snap_gpu[:7] = d.root_link_pose_w[0]
+        self._snap_gpu[7:13] = d.root_com_vel_w[0]
+        self._snap_gpu[js:vs] = d.joint_pos[0]
+        self._snap_gpu[vs:] = d.joint_vel[0]
         self._snap_time = self.sim_time
 
         self._snap_cpu.copy_(self._snap_gpu, non_blocking=False)
@@ -594,12 +545,11 @@ class IsaacLabSimServer:
 
     def _reset_robot(self):
         """Reset robot to the INIT_CONFIG state (matching MuJoCo server's qpos_init/qvel_init reset)."""
-        self.robot.write_root_link_pose_to_sim_index(root_pose=self.init_root_pose.clone())
-        self.robot.write_root_link_velocity_to_sim_index(root_velocity=self.init_root_vel.clone())
-        self.robot.write_joint_position_to_sim_index(position=self.init_joint_pos.clone())
-        self.robot.write_joint_velocity_to_sim_index(velocity=self.init_joint_vel.clone())
+        self.robot.write_root_link_pose_to_sim(self.init_root_pose.clone())
+        self.robot.write_root_com_velocity_to_sim(self.init_root_vel.clone())
+        self.robot.write_joint_state_to_sim(self.init_joint_pos.clone(), self.init_joint_vel.clone())
         zero_efforts = torch.zeros_like(self.init_joint_pos)
-        self.robot.set_joint_effort_target_index(target=zero_efforts)
+        self.robot.set_joint_effort_target(zero_efforts)
         self.scene.reset()
 
     # =========================================================================
@@ -632,15 +582,16 @@ class IsaacLabSimServer:
             time.sleep(1.0)
             return
 
-        q = wp.to_torch(self.robot.data.joint_pos)[0]
-        qd = wp.to_torch(self.robot.data.joint_vel)[0]
+        q = self.robot.data.joint_pos[0]
+        qd = self.robot.data.joint_vel[0]
 
         torch.sub(self._q_des_full, q, out=self._err_q)
         torch.addcmul(self._ff_full, self._kp_full, self._err_q, value=1, out=self._tau_1d)
         torch.sub(self._qd_des_full, qd, out=self._err_qd)
         self._tau_1d.addcmul_(self._kd_full, self._err_qd, value=1)
 
-        self.robot.data._sim_bind_joint_effort.assign(wp.from_torch(self._tau_2d))
+        self.robot._joint_effort_target_sim[:] = self._tau_2d
+        self.robot.root_physx_view.set_dof_actuation_forces(self.robot._joint_effort_target_sim, self.robot._ALL_INDICES)
 
         t2 = time.perf_counter()
 
@@ -650,8 +601,6 @@ class IsaacLabSimServer:
 
         self.sim_time += self.dt
         self.robot.data._sim_timestamp += self.dt
-        if self.robot.data._fk_timestamp >= 0.0:
-            self.robot.data._fk_timestamp = self.robot.data._sim_timestamp
 
         self._snap_step += 1
         if self._snap_step >= self._snap_interval:
@@ -692,8 +641,6 @@ class IsaacLabSimServer:
         self.sim.step()
         self.sim_time += self.dt
         self.robot.data._sim_timestamp += self.dt
-        if self.robot.data._fk_timestamp >= 0.0:
-            self.robot.data._fk_timestamp = self.robot.data._sim_timestamp
 
     # =========================================================================
     # TCP server thread

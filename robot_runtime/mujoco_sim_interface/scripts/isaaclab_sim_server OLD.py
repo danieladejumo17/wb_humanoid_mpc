@@ -260,8 +260,7 @@ class IsaacLabSimServer:
         self.latest_kd: np.ndarray = np.array([])
         self.latest_ff: np.ndarray = np.array([])
 
-        self._snap_time: float = 0.0
-        self._last_root_z: float = 1.0
+        self.latest_state: dict = {}
         self.dt: float = 0.0005
         self.sim_time: float = 0.0
 
@@ -353,41 +352,17 @@ class IsaacLabSimServer:
         response.type = pb.STATE_RESPONSE
         state_msg = response.robot_state
 
-        if self.robot is None:
-            self._send_message(conn, response)
-            return
+        with self.data_lock:
+            s = self.latest_state
 
-        d = self.robot.data
-        js = self._snap_jpos_start
-        vs = self._snap_jvel_start
-
-        self._snap_gpu[:7] = wp.to_torch(d.root_link_pose_w)[0]
-        self._snap_gpu[7:13] = wp.to_torch(d.root_com_vel_w)[0]
-        self._snap_gpu[js:vs] = wp.to_torch(d.joint_pos)[0]
-        self._snap_gpu[vs:] = wp.to_torch(d.joint_vel)[0]
-        t = self._snap_time
-
-        self._snap_cpu.copy_(self._snap_gpu, non_blocking=False)
-        buf = self._snap_cpu.numpy()
-        idx = self.joint_idx_np
-        js = self._snap_jpos_start
-        vs = self._snap_jvel_start
-
-        quat_xyzw = buf[3:7]
-        lin_vel_b = quat_rotate_inverse_xyzw(quat_xyzw, buf[7:10])
-        ang_vel_b = quat_rotate_inverse_xyzw(quat_xyzw, buf[10:13])
-
-        self._last_root_z = float(buf[2])
-
-        state_msg.time = t
-        state_msg.root_position.extend(buf[:3].tolist())
-        state_msg.root_orientation.extend([float(quat_xyzw[3]), float(quat_xyzw[0]),
-                                           float(quat_xyzw[1]), float(quat_xyzw[2])])
-        state_msg.root_linear_vel.extend(lin_vel_b.tolist())
-        state_msg.root_angular_vel.extend(ang_vel_b.tolist())
-        state_msg.joint_positions.extend(buf[js:vs][idx].tolist())
-        state_msg.joint_velocities.extend(buf[vs:][idx].tolist())
-        state_msg.contact_flags.extend([True, True])
+        state_msg.time = s.get("time", 0.0)
+        state_msg.root_position.extend(s.get("root_position", [0, 0, 0]))
+        state_msg.root_orientation.extend(s.get("root_orientation", [1, 0, 0, 0]))
+        state_msg.root_linear_vel.extend(s.get("root_linear_vel", [0, 0, 0]))
+        state_msg.root_angular_vel.extend(s.get("root_angular_vel", [0, 0, 0]))
+        state_msg.joint_positions.extend(s.get("joint_positions", []))
+        state_msg.joint_velocities.extend(s.get("joint_velocities", []))
+        state_msg.contact_flags.extend(s.get("contact_flags", [True, True]))
 
         self._send_message(conn, response)
 
@@ -568,13 +543,12 @@ class IsaacLabSimServer:
     # =========================================================================
 
     def _snapshot_state(self) -> float:
-        """Mark snapshot time. GPU→CPU deferred to _handle_get_state (TCP thread)."""
-        self._snap_time = self.sim_time
-        return self._last_root_z
+        """Read IsaacLab state and store as a thread-safe dict. Returns root_z.
 
-    def _snapshot_state_sync(self) -> float:
-        """Full GPU→CPU snapshot (used during init and reset)."""
+        Uses torch staging buffer on GPU with a single GPU->CPU sync.
+        """
         d = self.robot.data
+        idx = self.joint_idx_np
         js = self._snap_jpos_start
         vs = self._snap_jvel_start
 
@@ -582,11 +556,32 @@ class IsaacLabSimServer:
         self._snap_gpu[7:13] = wp.to_torch(d.root_com_vel_w)[0]
         self._snap_gpu[js:vs] = wp.to_torch(d.joint_pos)[0]
         self._snap_gpu[vs:] = wp.to_torch(d.joint_vel)[0]
-        self._snap_time = self.sim_time
 
         self._snap_cpu.copy_(self._snap_gpu, non_blocking=False)
-        self._last_root_z = float(self._snap_cpu[2].item())
-        return self._last_root_z
+        buf = self._snap_cpu.numpy()
+
+        pos = buf[:3]
+        quat_xyzw = buf[3:7]
+
+        lin_vel_b = quat_rotate_inverse_xyzw(quat_xyzw, buf[7:10])
+        ang_vel_b = quat_rotate_inverse_xyzw(quat_xyzw, buf[10:13])
+
+        snapshot = {
+            "time": self.sim_time,
+            "root_position": pos.tolist(),
+            "root_orientation": [float(quat_xyzw[3]), float(quat_xyzw[0]),
+                                 float(quat_xyzw[1]), float(quat_xyzw[2])],
+            "root_linear_vel": lin_vel_b.tolist(),
+            "root_angular_vel": ang_vel_b.tolist(),
+            "joint_positions": buf[js:vs][idx].tolist(),
+            "joint_velocities": buf[vs:][idx].tolist(),
+            "contact_flags": [True, True],
+        }
+
+        with self.data_lock:
+            self.latest_state = snapshot
+
+        return float(pos[2])
 
     # =========================================================================
     # Reset
@@ -628,7 +623,7 @@ class IsaacLabSimServer:
         if do_reset:
             self._reset_robot()
             self._do_sim_step()
-            self._snapshot_state_sync()
+            self._snapshot_state()
             time.sleep(1.0)
             return
 
@@ -683,7 +678,7 @@ class IsaacLabSimServer:
             logger.info("[sim] Auto-reset triggered (z=%.3f < 0.2)", root_z)
             self._reset_robot()
             self._do_sim_step()
-            self._snapshot_state_sync()
+            self._snapshot_state()
             time.sleep(1.0)
 
     def _do_sim_step(self):
@@ -759,7 +754,7 @@ class IsaacLabSimServer:
 
         logger.info("[main] Taking initial physics step...")
         self._do_sim_step()
-        self._snapshot_state_sync()
+        self._snapshot_state()
         self.init_step_done.set()
 
         logger.info("[main] Waiting for START_SIM...")
