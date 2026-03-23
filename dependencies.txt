@@ -9,6 +9,8 @@ libboost-log-dev
 libglfw3-dev
 liburdfdom-dev
 libabsl-dev
+libprotobuf-dev
+protobuf-compiler
 libxinerama-dev
 libxcursor-dev
 libxi-dev

@@ -187,6 +187,21 @@ launch-g1-sim:
 	source install/setup.bash && \
 	ros2 launch g1_centroidal_mpc mujoco_sim.launch.py 
 
+launch-g1-tcp:
+	cd ${build_dir} && \
+	source ${ros_source_file} && \
+	source install/setup.bash && \
+	ros2 launch g1_centroidal_mpc tcp.launch.py 
+
+run-mujoco-sim-server:
+	cd ${current_path} && \
+	source .venv/bin/activate && \
+	python3 robot_runtime/mujoco_sim_interface/scripts/mujoco_sim_server.py
+
+run-isaaclab-sim-server:
+	cd ${current_path} && \
+	source /wb_humanoid_mpc_ws/IsaacLab/env_isaaclab/bin/activate && \
+	python3 robot_runtime/mujoco_sim_interface/scripts/isaaclab_sim_server.py
 
 launch-wb-g1-dummy-sim:
 	cd ${build_dir} && \

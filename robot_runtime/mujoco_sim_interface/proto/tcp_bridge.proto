@@ -1,0 +1,48 @@
+syntax = "proto3";
+package robot_bridge;
+
+message SimConfig {
+  string scene_path = 1;
+  double dt = 2;
+  repeated string joint_names = 3;
+  RobotStateMsg init_state = 4;
+}
+
+message RobotStateMsg {
+  double time = 1;
+  repeated double root_position = 2;
+  repeated double root_orientation = 3;    // quaternion: w, x, y, z
+  repeated double root_linear_vel = 4;     // local (body) frame
+  repeated double root_angular_vel = 5;    // local (body) frame
+  repeated double joint_positions = 6;
+  repeated double joint_velocities = 7;
+  repeated bool contact_flags = 8;
+}
+
+message JointActionMsg {
+  repeated double q_des = 1;
+  repeated double qd_des = 2;
+  repeated double kp = 3;
+  repeated double kd = 4;
+  repeated double feed_forward_effort = 5;
+}
+
+enum MessageType {
+  INIT_CONFIG = 0;
+  INIT_SIM = 1;
+  START_SIM = 2;
+  GET_STATE = 3;
+  SEND_ACTION = 4;
+  RESET = 5;
+  STATE_RESPONSE = 6;
+  ACK = 7;
+}
+
+message TcpMessage {
+  MessageType type = 1;
+  oneof payload {
+    SimConfig sim_config = 2;
+    RobotStateMsg robot_state = 3;
+    JointActionMsg joint_action = 4;
+  }
+}

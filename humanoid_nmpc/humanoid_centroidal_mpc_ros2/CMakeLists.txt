@@ -48,6 +48,7 @@ find_package(Eigen3 3.3 REQUIRED NO_MODULE)
 find_package(glfw3 REQUIRED)
 find_package(GLEW REQUIRED)
 find_package(absl REQUIRED)
+find_package(Protobuf REQUIRED)
 
 
 ###########
@@ -146,6 +147,19 @@ target_link_libraries(humanoid_centroidal_mpc_sim
 )
 target_compile_options(humanoid_centroidal_mpc_sim PUBLIC ${FLAGS})
 
+# MPC TCP Sim Executable
+add_executable(humanoid_centroidal_mpc_tcp
+  src/CentroidalMpcRobotTCP.cpp
+)
+ament_target_dependencies(humanoid_centroidal_mpc_tcp
+  ${dependencies}
+)
+target_link_libraries(humanoid_centroidal_mpc_tcp
+        absl::flat_hash_map
+        ${Protobuf_LIBRARIES}
+)
+target_compile_options(humanoid_centroidal_mpc_tcp PUBLIC ${FLAGS})
+
 # Pose Command Node
 add_executable(humanoid_centroidal_mpc_pose_command_node
   src/CentroidalMpcKeyboardPoseCommandNode.cpp
@@ -193,6 +207,7 @@ install(DIRECTORY include/${PROJECT_NAME}
 install(TARGETS
   test_visualizer
   humanoid_centroidal_mpc_sim
+  humanoid_centroidal_mpc_tcp
   humanoid_centroidal_mpc_sqp_node
   humanoid_centroidal_mpc_dummy_sim_node
   humanoid_centroidal_mpc_pose_command_node

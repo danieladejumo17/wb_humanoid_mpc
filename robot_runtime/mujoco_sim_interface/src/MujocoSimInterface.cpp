@@ -290,7 +290,7 @@ void MujocoSimInterface::setSimState(const model::RobotState& robotState) {
   mujocoData_->qvel[5] = root_vel_ang_local_frame[2];
 
   // Joint State
-  for (size_t i = 0; i < nActiveJoints_; ++i) {
+  for (size_t i = 0; i < nActiveJoints_; ++i) {  // TODO: Bug --> Why use robotStateInternal_ instead of robotState?
     mujocoData_->qpos[i + 7] = robotStateInternal_.getJointPosition(activeRobotJointStateIndices_[i]);
     mujocoData_->qvel[i + 6] = robotStateInternal_.getJointVelocity(activeRobotJointStateIndices_[i]);
   }
@@ -311,7 +311,7 @@ void MujocoSimInterface::updateThreadSafeRobotState() {
   quaternion_t quat_l_to_w = quaternion_t(mujocoData_->qpos[3], mujocoData_->qpos[4], mujocoData_->qpos[5], mujocoData_->qpos[6]);
   vector3_t pelvisAngularVelLocal = vector3_t(mujocoData_->qvel[3], mujocoData_->qvel[4], mujocoData_->qvel[5]);
 
-  // Fix later
+  // TODO:Fix later
   // bool leftFootContact = (mujocoData_->sensordata[left_foot_touch_sensor_addr_] > 0.1);
   // bool rightFootContact = (mujocoData_->sensordata[right_foot_touch_sensor_addr_] > 0.1);
   bool leftFootContact = true;
@@ -383,7 +383,7 @@ void MujocoSimInterface::simulationStep() {
     // Sleep to let controller update and adjust;
     std::this_thread::sleep_until(std::chrono::steady_clock::now() + std::chrono::microseconds(1000000));
   }
-  mujocoMutex_.unlock();
+  mujocoMutex_.unlock();  // TODO: Bug --> UNdefined behavior unlocking twice
 }
 
 /******************************************************************************************************/

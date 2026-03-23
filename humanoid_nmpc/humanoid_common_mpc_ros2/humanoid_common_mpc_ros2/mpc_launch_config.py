@@ -97,6 +97,24 @@ class MPCLaunchConfig:
             ],
         )
 
+        mpc_tcp_exec = self.mpc_lib_pkg + "_tcp"
+        self.mpc_tcp = launch_ros.actions.Node(
+            package=self.mpc_lib_pkg_ros2,
+            executable=mpc_tcp_exec,
+            prefix=self.terminal_prefix,
+            name=mpc_tcp_exec,
+            arguments=[
+                LaunchConfiguration("robot_name"),
+                LaunchConfiguration("config_name"),
+                LaunchConfiguration("target_command_file"),
+                LaunchConfiguration("description_name"),
+                LaunchConfiguration("target_gait_file"),
+                LaunchConfiguration("xml_path"),
+                LaunchConfiguration("tcp_host"),
+                LaunchConfiguration("tcp_port"),
+            ],
+        )
+
         mpc_node_exec = self.mpc_lib_pkg + "_" + self.solver + "_node"
         self.mpc_node = launch_ros.actions.Node(
             package=self.mpc_lib_pkg_ros2,
@@ -282,6 +300,16 @@ class MPCLaunchConfig:
             "xml_path",
             default_value=self.xml_path,
             description="Path to Mujoco xml file",
+        )
+        self.declare_tcp_host = DeclareLaunchArgument(
+            "tcp_host",
+            default_value="localhost",
+            description="TCP host for the Python sim server",
+        )
+        self.declare_tcp_port = DeclareLaunchArgument(
+            "tcp_port",
+            default_value="9000",
+            description="TCP port for the Python sim server",
         )
         self.declare_rviz_config_path = DeclareLaunchArgument(
             "rvizconfig",

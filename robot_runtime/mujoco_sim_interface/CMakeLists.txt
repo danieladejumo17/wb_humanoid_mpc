@@ -34,11 +34,15 @@ find_package(glfw3 REQUIRED)
 
 find_package(GLEW REQUIRED)
 
+find_package(Protobuf REQUIRED)
+
 ###########
 ## Build ##
 ###########
 
 set(CMAKE_CXX_STANDARD 20)
+
+protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS proto/tcp_bridge.proto)
 
 include_directories(
   include
@@ -46,6 +50,8 @@ include_directories(
   ${catkin_INCLUDE_DIRS}
   ${EIGEN3_INCLUDE_DIRS}
   ${GTEST_INCLUDE_DIRS}
+  ${Protobuf_INCLUDE_DIRS}
+  ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 set(dependencies
@@ -64,6 +70,8 @@ set(dependencies
 add_library(${PROJECT_NAME}
   src/MujocoSimInterface.cpp
   src/MujocoRenderer.cpp
+  src/TcpHWInterface.cpp
+  ${PROTO_SRCS}
 )
 ament_target_dependencies(${PROJECT_NAME}
   ${dependencies}
@@ -71,6 +79,7 @@ ament_target_dependencies(${PROJECT_NAME}
 target_link_libraries(${PROJECT_NAME}
   ${Boost_LIBRARIES}
   ${urdf_LIBRARIES}
+  ${Protobuf_LIBRARIES}
   absl::flat_hash_map
   glfw
   GLEW
@@ -119,6 +128,10 @@ install(TARGETS
 
 install(DIRECTORY include/${PROJECT_NAME}
   DESTINATION include/
+)
+
+install(FILES ${PROTO_HDRS}
+  DESTINATION include/mujoco_sim_interface/
 )
 
 ament_export_include_directories(include)
