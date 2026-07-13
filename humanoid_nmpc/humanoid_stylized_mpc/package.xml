@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>humanoid_stylized_mpc</name>
+  <version>0.1.0</version>
+  <description>Stylized gait reference generation for the whole-body humanoid MPC (Disney-style interactive gait design)</description>
+  <maintainer email="dxa239@nyu.edu">Daniel</maintainer>
+  <license>BSD-3-Clause</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>humanoid_common_mpc</depend>
+  <depend>ocs2_core</depend>
+  <depend>ocs2_oc</depend>
+  <depend>ocs2_pinocchio_interface</depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>humanoid_wb_mpc</test_depend>
+  <test_depend>g1_wb_mpc</test_depend>
+  <test_depend>g1_description</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

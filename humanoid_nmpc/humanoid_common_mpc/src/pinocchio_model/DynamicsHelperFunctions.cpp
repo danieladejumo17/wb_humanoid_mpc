@@ -299,7 +299,7 @@ VECTOR_T<SCALAR_T> computeJointTorquesRNEA(const VECTOR_T<SCALAR_T>& q,
 
   auto setExternalForce = [&](const std::string& frameName, size_t i) {
     const auto frameIndex = model.getFrameId(frameName);
-    const auto jointIndex = model.frames[frameIndex].parentJoint;
+    const auto jointIndex = model.frames[frameIndex].parent;
     const VECTOR3_T<SCALAR_T> translationJointFrameToContactFrame = model.frames[frameIndex].placement.translation();
     const MATRIX3_T<SCALAR_T> rotationWorldFrameToJointFrame = data.oMi[jointIndex].rotation().transpose();
     const VECTOR3_T<SCALAR_T> contactForce = rotationWorldFrameToJointFrame * footWrenches[i].head(3);

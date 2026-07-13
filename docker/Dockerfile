@@ -25,6 +25,13 @@ RUN apt-get update && \
     envsubst < /tmp/dependencies.txt | xargs apt-get install -y --no-install-recommends && \
     rm -rf /var/lib/apt/lists/*
 
+# Pin Pinocchio (and hpp-fcl/eigenpy) to a version compatible with this codebase.
+# The default ROS Jazzy repo ships Pinocchio 4.0, which breaks this workspace
+# (reorganized headers, removed pinocchio::Frame::parent, boost::mpl/variant
+# joint-count overflow). See scripts/setup_pinocchio.sh for details.
+COPY scripts/setup_pinocchio.sh /tmp/setup_pinocchio.sh
+RUN bash /tmp/setup_pinocchio.sh && rm -rf /var/lib/apt/lists/*
+
 # Set default shell to bash
 SHELL ["/bin/bash", "-c"]
 
